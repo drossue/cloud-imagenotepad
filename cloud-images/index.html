@@ -1,1 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cloud Image Notepad</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; padding: 20px; background: #f0f4f8; color: #2d3748; }
+    h1 { text-align: center; margin-bottom: 20px; }
+    .upload-area { border: 2px dashed #4CAF50; border-radius: 10px; padding: 30px; text-align: center; margin-bottom: 20px; cursor: pointer; background: white; }
+    .upload-area.dragover { background: #e8f5e9; }
+    #filename { width: 100%; padding: 10px; margin: 10px 0; border-radius: 5px; border: 1px solid #ccc; }
+    .btn { padding: 10px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; }
+    .btn-primary { background: #4CAF50; color: white; }
+    .btn-secondary { background: #e2e8f0; }
+    #status { margin: 10px 0; padding: 10px; border-radius: 5px; display: none; }
+    .images-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(150px,1fr)); gap: 15px; }
+    .image-card { background: white; padding: 10px; border-radius: 8px; text-align: center; }
+    .image-card img { width: 100%; border-radius: 5px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1><i class="fas fa-cloud-upload-alt"></i> Cloud Image Notepad</h1>
+  <div class="upload-area" id="uploadArea">
+    <i class="fas fa-image" style="font-size:40px;color:#4CAF50"></i>
+    <p>Drag & drop or click to select an image</p>
+    <input type="file" id="imageInput" accept="image/*" style="display:none">
+  </div>
+  <input type="text" id="filename" placeholder="Enter filename (e.g., sunset.png)">
+  <div>
+    <button class="btn btn-primary" onclick="uploadImage()">Upload Image</button>
+    <button class="btn btn-secondary" onclick="loadImages()">Refresh List</button>
+  </div>
+  <div id="status"></div>
+  <div class="images-grid" id="images"></div>
 
+  <script>
+    const OWNER = "drossue";
+    const REPO = "cloud-image-notepad";
+    const FOLDER = "images";
+    const TOKEN = "YOUR_TOKEN_HERE"; // Replace with your GitHub token
+
+    const uploadArea = document.getElementById('uploadArea');
+    const imageInput = document.getElementById('imageInput');
+    const filenameInput = document.getElementById('filename');
+    const statusEl = document.getElementById('status');
+    const imagesContainer = document.getElementById('images');
+
+    let currentFiles = [];
+
+    // Drag & drop setup
+    uploadArea.addEventListener('click', () => imageInput.click());
+    uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+    uploadArea.addEventListener('dragleave', e => { e.preventDefault(); uploadArea.classList.remove('dragover'); });
+    uploadArea.addEventListener('drop', e => {
+      e.preventDefault(); uploadArea.classList.remove('dragover');
+      if(e.dataTransfer.files.length) imageInput.files = e.dataTransfer.files;
+    });
+    imageInput.addEventListener('change', () => { if(imageInput.files.length) filenameInput.value = imageInput.files[0].name; });
+
+    function setStatus(msg, type='info') {
+      statusEl.textContent = msg;
+      statusEl.style.display = 'block';
+      statusEl.style.background = type==='error'? '#f8d7da': type==='success'? '#d4edda': '#d1ecf1';
+      statusEl.style.color = type==='error'? '#721c24': type==='success'? '#155724': '#0c5460';
+      setTimeout(()=>statusEl.style.display='none', 4000);
+    }
+
+    async function loadImages() {
+      setStatus('Loading images...', 'info');
+      try {
+        const res = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${FOLDER}?t=${Date.now()}`, {
+          headers: { Authorization: `token ${TOKEN}`, Accept: 'application/vnd.github.v3+json' }
+        });
+        if(!res.ok) throw new Error('Failed to load images');
+        const files = await res.json();
+        currentFiles = files.filter(f => f.type==='file' && f.name.match(/\.(jpg|jpeg|png|gif|webp|bmp)$/i));
+        displayImages(currentFiles);
+        setStatus('Images loaded successfully', 'success');
+      } catch(err) { setStatus(err.message, 'error'); imagesContainer.innerHTML=''; }
+    }
+
+    function displayImages(files) {
+      imagesContainer.innerHTML = files.length ? '' : '<p>No images yet</p>';
+      files.forEach(file => {
+        const img = document.createElement('img');
+        img.src = file.download_url;
+        img.alt = file.name;
+        img.addEventListener('click', ()=>window.open(file.download_url,'_blank'));
+        const card = document.createElement('div');
+        card.className='image-card';
+        card.appendChild(img);
+        imagesContainer.appendChild(card);
+      });
+    }
+
+    async function uploadImage() {
+      const file = imageInput.files[0];
+      const filename = filenameInput.value.trim();
+      if(!file) return setStatus('Select an image first','error');
+      if(!filename) return setStatus('Enter a filename','error');
+
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const base64 = reader.result.split(',')[1];
+          let sha = null;
+          // check if file exists
+          const checkRes = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${FOLDER}/${encodeURIComponent(filename)}`, {
+            headers: { Authorization: `token ${TOKEN}`, Accept: 'application/vnd.github.v3+json' }
+          });
+          if(checkRes.ok) { const data = await checkRes.json(); sha = data.sha; }
+
+          const body = { message: sha ? `Update ${filename}` : `Add ${filename}`, content: base64, sha: sha };
+          const res = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${FOLDER}/${encodeURIComponent(filename)}`, { method:'PUT', headers:{ Authorization:`token ${TOKEN}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
+          if(!res.ok) throw new Error('Upload failed');
+          setStatus('Upload successful!', 'success');
+          imageInput.value=''; filenameInput.value='';
+          setTimeout(loadImages, 1000);
+        } catch(err){ setStatus(err.message,'error'); }
+      };
+      reader.readAsDataURL(file);
+    }
+
+    // Load images on page load
+    document.addEventListener('DOMContentLoaded', loadImages);
+  </script>
+</body>
+</html>
